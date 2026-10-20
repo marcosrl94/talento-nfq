@@ -137,6 +137,20 @@ function demoApi(){
       }
     },
     async saveModulo(m){ if(!editaModulo(m)) throw new Error('Sin permiso'); DB.modulos[m.id] = Object.assign({}, m, {actualizado:new Date().toISOString(), actualizado_por:ME.email}); },
+    async importarPerfiles(filas){
+      if(!esRF()) throw new Error('Solo Formación o un administrador pueden importar perfiles');
+      const out = [];
+      for(const f of filas){
+        try{
+          const email = String(f.email||'').trim().toLowerCase(); if(!email) throw new Error('sin email');
+          const existe = !!DB.personas[email];
+          if(!existe) DB.personas[email] = {email, nombre:f.nombre||null, rol:'lector', ug:'UG02'};
+          await this.savePerfil(email, {nombre:f.nombre||DB.personas[email].nombre, categoria:f.categoria||null, banda:f.banda, cuadrante:f.cuadrante, practica:f.practica, practica2:f.practica2||null, mentor:f.mentor||DB.personas[email].mentor||null, proyecto:f.proyecto||DB.personas[email].proyecto||null, fecha_alta:f.fecha_alta||DB.personas[email].fecha_alta||null});
+          out.push({email, resultado: existe ? 'actualizado' : 'alta'});
+        }catch(e){ out.push({email:f.email, resultado:'error: '+(e.message||e)}); }
+      }
+      return out;
+    },
     signIn(){}, signOut(){ location.reload(); }
   };
 }
@@ -180,6 +194,7 @@ function sbApi(){
     async asignar(email, tipo, fecha){ const {data, error} = await sb.rpc('formacion_asignar', {p_email:email, p_tipo:tipo, p_fecha:fecha||today()}); if(error) throw error; await loadAll(); return data; },
     async savePerfil(email, patch){ const {error} = await sb.from('miembros').update(patch).eq('email', email); if(error) throw error; await loadAll(); },
     async saveModulo(m){ const data = clone(m); delete data.actualizado; delete data.actualizado_por; const {error} = await sb.from('formacion_modulos').upsert({id:m.id, ug:'ALL', data}, {onConflict:'id'}); if(error) throw error; DB.modulos[m.id] = m; },
+    async importarPerfiles(filas){ const {data, error} = await sb.rpc('formacion_importar_perfiles', {p_filas:filas}); if(error) throw error; await loadAll(); return data||[]; },
     signIn(){ sb.auth.signInWithOAuth({provider:'google', options:{redirectTo: location.origin+location.pathname, queryParams:{hd:DOMAIN, prompt:'select_account'}}}); },
     async signOut(){ await sb.auth.signOut(); location.reload(); }
   };
@@ -241,6 +256,7 @@ function viewRuta(){
   html += '<div class="kpis"><div class="kpi"><b class="num">'+hrs(R.hechas)+'</b><span>hechas de '+hrs(R.plan)+' planificadas</span></div><div class="kpi"><b class="num">'+R.pct+' %</b><span>'+R.cerrados+' de '+R.modulos+' módulos cerrados</span></div><div class="kpi"><b class="num">'+R.oblPend+'</b><span>obligatorios pendientes</span></div><div class="kpi"><b class="num">'+pct40+' %</b><span>del objetivo de 40 h/año</span></div></div>';
   html += '<div class="prog" title="Horas hechas sobre 40"><i style="width:'+pct40+'%"></i></div>';
   if(!rows.length) html += '<section class="panel"><div class="empty">Perfil completo pero sin módulos asignados. '+(valida(p)||mio?'<button class="btn sm" data-act="asignar" data-id="'+esc(p.email)+'" data-tipo="alta">Asignar ruta de incorporación</button>':'')+'</div></section>';
+  html += semanaUno(p, rows);
   html += '<div class="subtabs" role="tablist">'+[['','Todas'],...CAPAS.map(c=>[c,c])].map(([k,l]) => '<button class="subtab" role="tab" data-act="capa" data-id="'+k+'" aria-selected="'+(S.capa===k)+'">'+l+'<b>'+(k?rows.filter(r=>(DB.modulos[r.modulo]||{}).capa===k).length:rows.length)+'</b></button>').join('')+'</div>';
   for(const c of CAPAS){
     if(S.capa && S.capa!==c) continue;
@@ -250,6 +266,30 @@ function viewRuta(){
     html += g.map(({r,m}) => rutaRow(p, r, m)).join('')+'</section>';
   }
   return html;
+}
+/* Onboarding: la semana New Joiners como agenda, generada desde la ruta de alta.
+   Entra lo que el catálogo sitúa en la primera semana (Firma "Semana 1", PR-01, C-03, PR-02),
+   repartido en cinco días laborables desde la fecha de alta, unas 6 h por día. */
+const SEMANA1_RX = /^Semana 1$|^Días 1–5|^Día 1 en el proyecto|^Semana 1 en el proyecto/;
+const SEMANA1_ORDEN = ['F-01','F-02','PR-01','F-03','F-04','F-05','F-06','F-09','C-03','PR-02'];
+function semanaUno(p, rows){
+  const ev = Object.values(DB.eventos).filter(e => e.email===p.email && e.tipo==='alta').sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)))[0];
+  if(!ev) return '';
+  const items_ = rows.map(r => ({r, m:DB.modulos[r.modulo]})).filter(x => x.m && SEMANA1_RX.test(x.m.momento||''));
+  if(!items_.length) return '';
+  items_.sort((a,b) => { const ia = SEMANA1_ORDEN.indexOf(a.m.tpl), ib = SEMANA1_ORDEN.indexOf(b.m.tpl); return (ia<0?99:ia)-(ib<0?99:ib) || a.m.id.localeCompare(b.m.id); });
+  const abiertos = items_.filter(x => !CERRADO.includes(x.r.estado)).length;
+  const dias = Math.round((Date.now() - new Date(ev.fecha+'T00:00:00').getTime())/864e5);
+  if(!abiertos && dias > 60) return '';
+  // días laborables desde la fecha de alta
+  const fechas = []; let d = new Date(ev.fecha+'T00:00:00'); while(fechas.length < 5){ if(d.getDay()!==0 && d.getDay()!==6) fechas.push(new Date(d)); d.setDate(d.getDate()+1); }
+  const cols = fechas.map(() => []); let i = 0, carga = 0;
+  for(const x of items_){ const hh = Number(x.m.horas)||0; if(carga > 0 && carga + hh > 6.5 && i < 4){ i++; carga = 0; } cols[i].push(x); carga += hh; }
+  const DOW = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+  const total = horasDe(items_.map(x=>x.m)), hechas = horasDe(items_.filter(x=>CERRADO.includes(x.r.estado)).map(x=>x.m));
+  return '<section class="panel week-panel"><div class="capa-h"><h2>'+(p.email===ME.email?'Tu primera semana':'Primera semana')+' <span class="pill info">New Joiners</span></h2><span class="note">'+hrs(hechas)+' de '+hrs(total)+' · '+(abiertos?abiertos+' por hacer':'completada')+' · desde el '+fdate(ev.fecha)+' · se imputa al proyecto Formación en el TRON</span></div>'+
+    '<div class="week">'+cols.map((c, k) => '<div class="day"><div class="day-h"><b>Día '+(k+1)+'</b><span class="note">'+DOW[fechas[k].getDay()]+' '+pad(fechas[k].getDate())+'/'+pad(fechas[k].getMonth()+1)+' · '+hrs(horasDe(c.map(x=>x.m)))+'</span></div>'+
+      (c.map(({r,m}) => '<a href="#" class="ditem st-'+esc(r.estado)+'" data-act="modulo" data-id="'+esc(m.id)+'" title="'+esc(ESTADOS[r.estado])+'"><span class="st" aria-hidden="true"></span><span class="dname"><code>'+esc(m.id)+'</code> '+esc(m.nombre.split(' · ')[0])+'</span><span class="dh num">'+hrs(m.horas)+'</span></a>').join('') || '<div class="note" style="padding:8px 0">Libre: proyecto y lecturas de la práctica.</div>')+'</div>').join('')+'</div></section>';
 }
 function rutaRow(p, r, m){
   const a = m.aplica[p.banda]; const mio = p.email===ME.email; const v = valida(p);
@@ -371,7 +411,49 @@ function viewSeguimiento(){
   const cnt = {}; Object.values(DB.progreso).forEach(r => { if(r.estado==='pendiente') cnt[r.modulo] = (cnt[r.modulo]||0)+1; });
   const top = Object.entries(cnt).sort((a,b)=>b[1]-a[1]).slice(0,10);
   html += '<section class="panel" style="margin-top:14px"><div class="capa-h"><h2>Módulos con más personas pendientes</h2><span class="note">dónde conviene convocar primero</span></div><div class="tablewrap"><table class="tbl"><tbody>'+top.map(([id,n]) => { const m = DB.modulos[id]||{}; return '<tr><td><code>'+esc(id)+'</code></td><td><a href="#" data-act="modulo" data-id="'+esc(id)+'">'+esc(m.nombre||id)+'</a></td><td><span class="tag '+(MAT[m.estado]||['',''])[1]+'">'+(MAT[m.estado]||[''])[0]+'</span></td><td class="num"><b>'+n+'</b> personas</td></tr>'; }).join('')+'</tbody></table></div></section>';
+  html += viewImportar();
   return html;
+}
+
+/* --- carga inicial de perfiles (Formación) --- */
+const IMP_COLS = ['email','nombre','categoria','banda','cuadrante','practica','practica2','mentor','proyecto','fecha_alta'];
+function bandaDe(cat){ const n = norm(cat); if(!n) return ''; if(/manager|mgr/.test(n)) return 'M'; if(/director|partner|socio/.test(n)) return 'D'; if(/cnsr|senior|expr|expert/.test(n)) return 'S'; if(/^assi|^assistant|^cons|^consult/.test(n)) return 'J'; return ''; }
+function parseCsv(txt){
+  const lines = String(txt||'').split(/\r?\n/).filter(l => l.trim());
+  if(lines.length < 2) return {error:'Hacen falta una fila de cabecera y al menos una de datos.', rows:[]};
+  const sep = [';','\t',','].sort((a,b) => lines[0].split(b).length - lines[0].split(a).length)[0];
+  const head = lines[0].split(sep).map(s => norm(s).replace(/[^a-z0-9_]/g,'').replace(/^fechaalta$|^alta$/,'fecha_alta').replace(/^practicasecundaria$/,'practica2').replace(/^practicaprincipal$/,'practica').replace(/^correo$|^mail$/,'email').replace(/^cuadrantecliente$|^ug$/,'cuadrante'));
+  if(!head.includes('email')) return {error:'La cabecera necesita una columna «email». Columnas: '+IMP_COLS.join(', ')+'.', rows:[]};
+  const cuads = items('cuadrantes').map(c=>c.id), pracs = items('practicas').map(p=>p.id);
+  const alias = s => { const u = String(s||'').trim().toUpperCase(); if(!u) return ''; const c = items('cuadrantes').find(x => x.id===u || x.ug===u || norm(x.nombre)===norm(u)); if(c) return c.id; const p = items('practicas').find(x => x.id===u || norm(x.nombre)===norm(u) || (x.horizontales||[]).some(hh => norm(hh)===norm(u))); return p ? p.id : u; };
+  const rows = lines.slice(1).map((l, i) => {
+    const cells = l.split(sep); const r = {}; head.forEach((k, j) => { if(IMP_COLS.includes(k)) r[k] = String(cells[j]||'').trim(); });
+    r.email = String(r.email||'').toLowerCase(); r.cuadrante = alias(r.cuadrante); r.practica = alias(r.practica); r.practica2 = alias(r.practica2);
+    r.banda = String(r.banda||'').toUpperCase() || bandaDe(r.categoria); r.mentor = String(r.mentor||'').toLowerCase();
+    const err = [];
+    if(!/^[a-z0-9._%+-]+@nfq\.es$/.test(r.email)) err.push('email no es @nfq.es');
+    if(!['J','S','M','D'].includes(r.banda)) err.push('banda desconocida'+(r.categoria?' para «'+r.categoria+'»':''));
+    if(!cuads.includes(r.cuadrante)) err.push('cuadrante «'+(r.cuadrante||'—')+'» no existe');
+    if(!pracs.includes(r.practica)) err.push('práctica «'+(r.practica||'—')+'» no existe');
+    if(r.practica2 && !pracs.includes(r.practica2)) err.push('práctica secundaria no existe');
+    if(r.fecha_alta && !/^\d{4}-\d{2}-\d{2}$/.test(r.fecha_alta)){ const m = r.fecha_alta.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if(m) r.fecha_alta = m[3]+'-'+pad(m[2])+'-'+pad(m[1]); else err.push('fecha no es AAAA-MM-DD'); }
+    return Object.assign(r, {linea:i+2, errores:err, existe:!!DB.personas[r.email]});
+  });
+  return {error:null, rows};
+}
+function viewImportar(){
+  if(!esRF()) return '';
+  const imp = S.imp || (S.imp = {txt:'', prev:null, res:null});
+  let html = '<section class="panel" style="margin-top:14px"><div class="capa-h"><h2>Carga inicial de perfiles</h2><span class="note">pega la hoja de RR. HH. o My.NFQ; la ruta se asigna sola al guardar</span></div><div style="padding:12px 16px;display:grid;gap:10px">'+
+    '<p class="note">Columnas (separadas por ; , o tabulador, con cabecera): <code>'+IMP_COLS.join(' · ')+'</code>. La banda se deduce de la categoría si va vacía. Cuadrante y práctica admiten código (BBVA, SOS), UG (UG02) o nombre.</p>'+
+    '<textarea id="impcsv" rows="5" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)" placeholder="email;nombre;categoria;cuadrante;practica;practica2;mentor;proyecto;fecha_alta">'+esc(imp.txt)+'</textarea>'+
+    '<div class="actions"><button class="btn quiet" data-act="impprev">Previsualizar</button>'+(imp.prev && imp.prev.rows.some(r=>!r.errores.length) ? '<button class="btn" data-act="impgo">Importar '+h(imp.prev.rows.filter(r=>!r.errores.length).length,'perfil','perfiles')+'</button>' : '')+(imp.prev||imp.res?'<button class="linkbtn" data-act="impclear">Limpiar</button>':'')+'</div>';
+  if(imp.prev){
+    if(imp.prev.error) html += '<p class="formerr">'+esc(imp.prev.error)+'</p>';
+    else html += '<div class="tablewrap"><table class="tbl"><thead><tr><th>Línea</th><th>Email</th><th>Nombre</th><th>Banda</th><th>Cuadrante</th><th>Práctica</th><th>Mentor</th><th>Alta</th><th>Resultado</th></tr></thead><tbody>'+imp.prev.rows.map(r => '<tr><td class="num">'+r.linea+'</td><td>'+esc(r.email)+'</td><td>'+esc(r.nombre||'')+'</td><td>'+esc(r.banda)+'</td><td>'+esc(r.cuadrante)+'</td><td>'+esc(r.practica)+(r.practica2?' <span class="note">+ '+esc(r.practica2)+'</span>':'')+'</td><td class="note">'+esc(r.mentor||'—')+'</td><td class="note">'+esc(r.fecha_alta||'—')+'</td><td>'+(r.errores.length?'<span class="tag stop">'+esc(r.errores.join('; '))+'</span>':'<span class="tag go">'+(r.existe?'actualizar':'alta nueva')+'</span>')+'</td></tr>').join('')+'</tbody></table></div>';
+  }
+  if(imp.res) html += '<div class="tablewrap"><table class="tbl"><tbody>'+imp.res.map(r => '<tr><td>'+esc(r.email)+'</td><td>'+(/^error/.test(r.resultado)?'<span class="tag stop">'+esc(r.resultado)+'</span>':'<span class="tag go">'+esc(r.resultado)+'</span>')+'</td></tr>').join('')+'</tbody></table></div>';
+  return html + '</div></section>';
 }
 
 /* --- diálogos --- */
@@ -430,6 +512,9 @@ document.addEventListener('click', async e => {
   else if(a==='asignar'){ try{ const n = await api.asignar(id, t.dataset.tipo, today()); render(); toast(n ? h(n,'módulo asignado','módulos asignados')+'.' : 'Nada nuevo que asignar.'); }catch(err){ fail(err); } }
   else if(a==='cat'){ S.cat[t.dataset.k] = t.dataset.v; render(); }
   else if(a==='wizsave'){ const d = S.wiz.draft; if(!d) return; const patch = {categoria:d.categoria||null, banda:d.banda, cuadrante:d.cuadrante, practica:d.practica, practica2:d.practica2||null, proyecto:d.proyecto||null, fecha_alta:d.fecha_alta||null}; if(esRF()) patch.mentor = d.mentor||null; try{ await api.savePerfil(d.email, patch); S.person = d.email; S.view = 'ruta'; S.wiz.draft = null; render(); toast('Perfil guardado y ruta asignada.'); }catch(err){ fail(err); } }
+  else if(a==='impprev'){ const ta = document.getElementById('impcsv'); S.imp = S.imp || {}; S.imp.txt = ta ? ta.value : ''; S.imp.res = null; S.imp.prev = parseCsv(S.imp.txt); render(); }
+  else if(a==='impgo'){ const ok = (S.imp && S.imp.prev ? S.imp.prev.rows : []).filter(r => !r.errores.length).map(r => ({email:r.email, nombre:r.nombre||null, categoria:r.categoria||null, banda:r.banda, cuadrante:r.cuadrante, practica:r.practica, practica2:r.practica2||null, mentor:r.mentor||null, proyecto:r.proyecto||null, fecha_alta:r.fecha_alta||null})); if(!ok.length) return; try{ const res = await api.importarPerfiles(ok); S.imp.res = res; S.imp.prev = null; S.imp.txt = ''; render(); toast(h(res.filter(r=>!/^error/.test(r.resultado)).length,'perfil cargado','perfiles cargados')+'.'); }catch(err){ fail(err); } }
+  else if(a==='impclear'){ S.imp = {txt:'', prev:null, res:null}; render(); }
   else if(a==='close'){ const d = t.closest('dialog'); d && d.close(); }
   else if(a==='signin'){ api.signIn(); }
   else if(a==='signout'){ api.signOut(); }

@@ -138,7 +138,8 @@ Segunda pantalla de la misma instalación: la ruta formativa de cada persona seg
 | `supabase/seed/formacion_catalogo.sql` | Catálogo v0: 30 módulos tipo, 122 instancias (Cliente × 7 cuadrantes, Práctica × 9 prácticas). Idempotente |
 | `public/formacion.html` + `public/formacion.js` | Pantallas: Mi ruta, Perfil, Equipo, Catálogo, Seguimiento. Mismo login y mismos miembros que la app |
 | `prototipo/formacion.html` + `prototipo/demo/formacion-demo.js` | Prototipo sin servidor con personas y progreso ficticios |
+| `supabase/seed/perfiles_plantilla.csv` | Cabecera de la hoja de carga inicial de perfiles (se pega en Seguimiento → Carga inicial, o se pasa a `formacion_importar_perfiles()`) |
 
-Puesta en marcha: ejecutar la migración y después la semilla (como `postgres`); dar de alta los roles de formación en `formacion_roles` (al menos un `rf`); completar banda, cuadrante y práctica de cada miembro (la ruta se asigna sola). Al cambiar `public/formacion.js`, copiarlo también a `prototipo/formacion.js`.
+Puesta en marcha: ejecutar la migración y después la semilla (como `postgres`); dar de alta los roles de formación en `formacion_roles` (al menos un `rf`); cargar los perfiles desde la hoja de RR. HH. en *Seguimiento → Carga inicial de perfiles* (la ruta se asigna sola y la persona recién incorporada ve su semana New Joiners como agenda en *Mi ruta*). Al cambiar `public/formacion.js`, copiarlo también a `prototipo/formacion.js`.
 
 Reglas que aplica la base de datos: la persona mueve su progreso entre pendiente, en curso y completado con evidencia; convalidar, eximir y validar es del mentor o de Formación; cada RFUN edita los módulos de su cuadrante y cada RFP los de su práctica; el cambio de banda, cuadrante o práctica lo registra Formación y dispara la reasignación.

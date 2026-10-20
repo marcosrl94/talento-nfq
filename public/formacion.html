@@ -353,6 +353,19 @@ code{font-size:13px;background:var(--surface-2);padding:1px 5px;border-radius:4p
 .check input{accent-color:var(--brand)}
 .dw ul{margin:6px 0 0;padding-left:18px}
 .toolbar .field{flex:0 1 auto} .toolbar .field select,.toolbar .field input{margin-left:6px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink)}
+.week-panel{margin-top:14px}
+.week{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:1px;background:var(--line)}
+.day{background:var(--surface);padding:10px 12px;display:grid;gap:6px;align-content:start;min-width:0}
+.day-h{display:grid;gap:2px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.ditem{display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:6px;align-items:start;font-size:13px;color:var(--ink);text-decoration:none;padding:4px 0}
+.ditem:hover .dname{text-decoration:underline}
+.ditem .st{width:12px;height:12px;border-radius:50%;border:2px solid var(--ink-2);margin-top:3px}
+.ditem.st-en_curso .st{border-color:var(--brand);background:linear-gradient(90deg,var(--brand) 50%,transparent 50%)}
+.ditem.st-completado .st,.ditem.st-convalidado .st,.ditem.st-exento .st{border-color:var(--ok);background:var(--ok)}
+.ditem.st-completado .dname,.ditem.st-convalidado .dname,.ditem.st-exento .dname{color:var(--ink-2)}
+.ditem .dh{color:var(--ink-2);font-size:12px;white-space:nowrap}
+@media (max-width:900px){ .week{grid-template-columns:repeat(2,minmax(0,1fr))} }
+@media (max-width:520px){ .week{grid-template-columns:1fr} }
 .demo-banner{background:var(--warn-soft);color:var(--warn);text-align:center;font-size:13px;padding:6px 16px}
 @media (max-width:760px){ .mrow{grid-template-columns:1fr auto} .mrow-id{grid-column:1/-1} .mrow-a{grid-column:1/-1;justify-content:flex-start} .form{grid-template-columns:1fr} }
 </style>

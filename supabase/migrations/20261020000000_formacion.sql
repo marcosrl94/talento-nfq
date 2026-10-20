@@ -300,6 +300,57 @@ end $$;
 create trigger miembros_solo_perfil before update on public.miembros
   for each row execute function public.miembros_solo_perfil();
 
+-- Carga inicial de perfiles desde la hoja de RR. HH. / My.NFQ (solo Formación o administradores).
+-- Cada fila: email, nombre, categoria, banda (opcional: se deduce de la categoría), cuadrante,
+-- practica, practica2, mentor, proyecto, fecha_alta. Da de alta al miembro si no existe (rol lector)
+-- y actualiza el perfil; la ruta se asigna por el trigger de perfil.
+create or replace function public.formacion_banda_de(p_categoria text) returns text
+language sql immutable as $$
+  select case
+    when p_categoria ~* '^(assi|assistant|cons$|consultant$|consultor$)' then 'J'
+    when p_categoria ~* '(cnsr|senior|expr|expert)' and p_categoria !~* 'manager' then 'S'
+    when p_categoria ~* 'manager|mgr|smgr' then 'M'
+    when p_categoria ~* 'director|partner|socio' then 'D'
+  end
+$$;
+
+create or replace function public.formacion_importar_perfiles(p_filas jsonb)
+returns table (email text, resultado text)
+language plpgsql security definer set search_path = public
+as $$
+declare f jsonb; e text; b text; existe boolean;
+begin
+  if not public.f_es_rf() then raise exception 'Solo Formación o un administrador pueden importar perfiles'; end if;
+  if jsonb_typeof(p_filas) <> 'array' then raise exception 'Se esperaba una lista de filas'; end if;
+  for f in select * from jsonb_array_elements(p_filas) loop
+    e := lower(trim(coalesce(f ->> 'email', '')));
+    begin
+      if e = '' then raise exception 'sin email'; end if;
+      b := coalesce(nullif(upper(trim(f ->> 'banda')), ''), public.formacion_banda_de(f ->> 'categoria'));
+      if b is null then raise exception 'banda desconocida para la categoría «%»', f ->> 'categoria'; end if;
+      if nullif(f ->> 'cuadrante', '') is null or nullif(f ->> 'practica', '') is null then raise exception 'faltan cuadrante o práctica'; end if;
+      select exists (select 1 from public.miembros m where m.email = e) into existe;
+      if not existe then
+        insert into public.miembros (email, nombre, rol) values (e, nullif(trim(f ->> 'nombre'), ''), 'lector');
+      end if;
+      update public.miembros m set
+        nombre     = coalesce(nullif(trim(f ->> 'nombre'), ''), m.nombre),
+        categoria  = coalesce(nullif(trim(f ->> 'categoria'), ''), m.categoria),
+        banda      = b,
+        cuadrante  = upper(trim(f ->> 'cuadrante')),
+        practica   = upper(trim(f ->> 'practica')),
+        practica2  = nullif(upper(trim(coalesce(f ->> 'practica2', ''))), ''),
+        mentor     = coalesce(nullif(lower(trim(coalesce(f ->> 'mentor', ''))), ''), m.mentor),
+        proyecto   = coalesce(nullif(trim(f ->> 'proyecto'), ''), m.proyecto),
+        fecha_alta = coalesce(nullif(trim(f ->> 'fecha_alta'), '')::date, m.fecha_alta)
+      where m.email = e;
+      email := e; resultado := case when existe then 'actualizado' else 'alta' end; return next;
+    exception when others then
+      email := e; resultado := 'error: ' || sqlerrm; return next;
+    end;
+  end loop;
+end $$;
+
 -- Resumen por persona (para Equipo y Seguimiento), con la misma visibilidad que el progreso.
 create or replace view public.formacion_resumen
 with (security_invoker = true) as
