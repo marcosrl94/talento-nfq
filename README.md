@@ -127,3 +127,18 @@ La prueba recorre estos casos:
 - Violaciones de CSP.
 
 La migración se ha probado sobre PostgreSQL local con los roles reales: el aislamiento por rol, la auditoría y la regla de «al menos un admin». **No se ha probado aún contra un Supabase ni un Drive reales.**
+
+## Formación por capas (`formacion.html`)
+
+Segunda pantalla de la misma instalación: la ruta formativa de cada persona según su perfil (banda, cuadrante de cliente, práctica) y su situación (alta, cambio, promoción, año en régimen). Ejecuta el procedimiento de Gestión del Conocimiento (SGC v2.0) por perfil; los módulos llevan su bloque del SGC, canal, evaluación y rol responsable.
+
+| Pieza | Qué es |
+|---|---|
+| `supabase/migrations/20261020000000_formacion.sql` | Perfil en `miembros`, roles de formación (`rf`, `rct`, `rfun`, `rfp`), catálogo (`formacion_config`, `formacion_modulos`), eventos y progreso, RLS, la función `formacion_ruta()` y la asignación automática al cambiar el perfil |
+| `supabase/seed/formacion_catalogo.sql` | Catálogo v0: 30 módulos tipo, 122 instancias (Cliente × 7 cuadrantes, Práctica × 9 prácticas). Idempotente |
+| `public/formacion.html` + `public/formacion.js` | Pantallas: Mi ruta, Perfil, Equipo, Catálogo, Seguimiento. Mismo login y mismos miembros que la app |
+| `prototipo/formacion.html` + `prototipo/demo/formacion-demo.js` | Prototipo sin servidor con personas y progreso ficticios |
+
+Puesta en marcha: ejecutar la migración y después la semilla (como `postgres`); dar de alta los roles de formación en `formacion_roles` (al menos un `rf`); completar banda, cuadrante y práctica de cada miembro (la ruta se asigna sola). Al cambiar `public/formacion.js`, copiarlo también a `prototipo/formacion.js`.
+
+Reglas que aplica la base de datos: la persona mueve su progreso entre pendiente, en curso y completado con evidencia; convalidar, eximir y validar es del mentor o de Formación; cada RFUN edita los módulos de su cuadrante y cada RFP los de su práctica; el cambio de banda, cuadrante o práctica lo registra Formación y dispara la reasignación.
